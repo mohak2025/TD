@@ -10,6 +10,8 @@
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<!-- SheetJS for proper Excel .xlsx generation -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
 <style>
 :root {
@@ -535,8 +537,8 @@ html, body {
   <!-- STICKY EXPORT FOOTER -->
   <div class="export-footer" id="export-footer">
     <div class="export-row">
-      <button class="btn btn-outline" onclick="downloadCSV()">↓ CSV</button>
-      <button class="btn btn-green"   onclick="copyJSON()">{ } JSON</button>
+      <button class="btn btn-excel"   onclick="downloadExcel()" style="background:#1a5c3a;color:white;border:none;flex:2">⬇ Download Excel</button>
+      <button class="btn btn-outline" onclick="downloadCSV()">CSV</button>
     </div>
     <div class="export-row">
       <button class="btn btn-oracle"  onclick="pushOracle()">⬡ Oracle GTM</button>
@@ -931,6 +933,151 @@ function renderResults(d) {
 // ═══════════════════════════════════════════════════════════════════════════
 // EXPORT FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════════════
+function downloadExcel() {
+  if (!extractedData) return;
+  const d = extractedData;
+
+  const wb = XLSX.utils.book_new();
+
+  // ── SHEET 1: Document Header ──────────────────────────────────────
+  const headerData = [
+    ['TradeDoc — Extracted Document', '', '', ''],
+    ['', '', '', ''],
+    ['DOCUMENT HEADER', '', '', ''],
+    ['Field', 'Value', '', ''],
+    ['Document Type',     d.document_type       || ''],
+    ['Document Number',   d.document_number     || ''],
+    ['Document Date',     d.document_date       || ''],
+    ['Currency',          d.currency            || ''],
+    ['Incoterms',         d.incoterms           || ''],
+    ['Total Value',       d.total_value         || ''],
+    ['Payment Terms',     d.payment_terms       || ''],
+    ['', '', '', ''],
+    ['SHIPPER / EXPORTER', '', '', ''],
+    ['Name',     d.shipper?.name    || ''],
+    ['Address',  d.shipper?.address || ''],
+    ['Country',  d.shipper?.country || ''],
+    ['', '', '', ''],
+    ['CONSIGNEE / IMPORTER', '', '', ''],
+    ['Name',     d.consignee?.name    || ''],
+    ['Address',  d.consignee?.address || ''],
+    ['Country',  d.consignee?.country || ''],
+    ['', '', '', ''],
+    ['ROUTING', '', '', ''],
+    ['Origin Country',      d.origin_country      || ''],
+    ['Destination Country', d.destination_country || ''],
+    ['Port of Loading',     d.port_of_loading     || ''],
+    ['Port of Discharge',   d.port_of_discharge   || ''],
+    ['Vessel / Flight',     d.vessel_flight       || ''],
+    ['', '', '', ''],
+    ['COMPLIANCE FLAGS', '', '', ''],
+  ];
+  (d.flags || []).forEach(f => headerData.push(['⚠', f, '', '']));
+  if (!d.flags?.length) headerData.push(['✓', 'No flags raised', '', '']);
+
+  const ws1 = XLSX.utils.aoa_to_sheet(headerData);
+
+  // Column widths
+  ws1['!cols'] = [{wch:28},{wch:45},{wch:20},{wch:20}];
+
+  // Style the title row (A1) - bold large
+  if (!ws1['A1']) ws1['A1'] = {};
+  ws1['A1'].s = { font: { bold: true, sz: 14, color: { rgb: '1A3A8F' } } };
+
+  // Style section headers
+  ['A3','A13','A18','A23','A30'].forEach(ref => {
+    if (ws1[ref]) ws1[ref].s = {
+      font: { bold: true, color: { rgb: 'FFFFFF' } },
+      fill: { fgColor: { rgb: '1A3A8F' } }
+    };
+  });
+
+  XLSX.utils.book_append_sheet(wb, ws1, 'Document Header');
+
+  // ── SHEET 2: Line Items ───────────────────────────────────────────
+  const lineHeaders = [
+    'Line #', 'Description', 'HS Code', 'Quantity', 'Unit',
+    'Unit Value', 'Total Value', 'Country of Origin', 'Confidence', 'Flags'
+  ];
+  const lineRows = (d.line_items || []).map(l => [
+    l.line_number   || '',
+    l.description   || '',
+    l.hs_code       || '',
+    l.quantity      || '',
+    l.unit          || '',
+    l.unit_value    || '',
+    l.total_value   || '',
+    l.country_of_origin || '',
+    l.confidence    || '',
+    (l.flags || []).join('; ') || ''
+  ]);
+
+  const ws2 = XLSX.utils.aoa_to_sheet([lineHeaders, ...lineRows]);
+  ws2['!cols'] = [
+    {wch:8},{wch:40},{wch:14},{wch:10},{wch:8},
+    {wch:14},{wch:14},{wch:18},{wch:12},{wch:35}
+  ];
+
+  // Freeze header row
+  ws2['!freeze'] = { xSplit: 0, ySplit: 1 };
+
+  XLSX.utils.book_append_sheet(wb, ws2, 'Line Items');
+
+  // ── SHEET 3: Oracle GTM Format ────────────────────────────────────
+  const oracleHeaders = [
+    'INVOICE_NUMBER','INVOICE_DATE','DOC_TYPE','SHIPPER','CONSIGNEE',
+    'ORIGIN_COUNTRY','DESTINATION_COUNTRY','CURRENCY','INCOTERMS','TOTAL_VALUE',
+    'LINE_NUMBER','DESCRIPTION','HS_CODE','QUANTITY','UNIT',
+    'UNIT_VALUE','LINE_TOTAL','COUNTRY_OF_ORIGIN','CONFIDENCE','STATUS'
+  ];
+  const oracleRows = (d.line_items || []).map(l => [
+    d.document_number, d.document_date, d.document_type,
+    d.shipper?.name, d.consignee?.name,
+    d.origin_country, d.destination_country,
+    d.currency, d.incoterms, d.total_value,
+    l.line_number, l.description, l.hs_code,
+    l.quantity, l.unit, l.unit_value, l.total_value,
+    l.country_of_origin, l.confidence, 'PENDING_REVIEW'
+  ]);
+  const ws3 = XLSX.utils.aoa_to_sheet([oracleHeaders, ...oracleRows]);
+  ws3['!cols'] = oracleHeaders.map((h,i) => ({wch: i===11?38:i===4||i===3?28:16}));
+  XLSX.utils.book_append_sheet(wb, ws3, 'Oracle GTM Import');
+
+  // ── SHEET 4: SAP GTS Format ───────────────────────────────────────
+  const sapHeaders = [
+    'BUKRS','LIFNR','BELNR','BLDAT','WAERS','ZTERM',
+    'MATNR','MAKTX','MENGE','MEINS','NETWR','WERKS',
+    'HSNUMBER','LANDLIEF','LANDTO','INCO1','INCO2'
+  ];
+  const sapRows = (d.line_items || []).map((l,i) => [
+    '1000',                    // Company code
+    d.shipper?.name || '',     // Vendor
+    d.document_number || '',   // Document number
+    d.document_date || '',     // Document date
+    d.currency || '',          // Currency
+    d.payment_terms || 'NET30',
+    `MAT-${String(i+1).padStart(5,'0')}`, // Material number
+    l.description || '',
+    l.quantity || '',
+    l.unit || 'EA',
+    l.total_value || '',
+    '0001',                    // Plant
+    l.hs_code || '',           // HS number
+    d.origin_country || '',    // Country of origin
+    d.destination_country || '',
+    d.incoterms?.split(' ')[0] || '',
+    d.incoterms?.split(' ').slice(1).join(' ') || ''
+  ]);
+  const ws4 = XLSX.utils.aoa_to_sheet([sapHeaders, ...sapRows]);
+  ws4['!cols'] = sapHeaders.map(() => ({wch:18}));
+  XLSX.utils.book_append_sheet(wb, ws4, 'SAP GTS Import');
+
+  // ── Download ──────────────────────────────────────────────────────
+  const filename = `TradeDoc_${d.document_number || 'export'}_${new Date().toISOString().slice(0,10)}.xlsx`;
+  XLSX.writeFile(wb, filename);
+  showToast('✓ Excel downloaded — 4 sheets');
+}
+
 function downloadCSV() {
   if (!extractedData) return;
   const d = extractedData;
@@ -946,15 +1093,12 @@ function downloadCSV() {
     l.quantity, l.unit, l.total_value,
     l.country_of_origin, l.confidence
   ].map(v => `"${(v||'').toString().replace(/"/g,'""')}"`).join(','));
-
   const csv = [headers.join(','), ...rows].join('\n');
   const blob = new Blob([csv], {type:'text/csv'});
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');
-  a.href = url;
-  a.download = `tradedoc_${d.document_number||'export'}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
+  a.href = url; a.download = `tradedoc_${d.document_number||'export'}.csv`;
+  a.click(); URL.revokeObjectURL(url);
   showToast('✓ CSV downloaded');
 }
 
